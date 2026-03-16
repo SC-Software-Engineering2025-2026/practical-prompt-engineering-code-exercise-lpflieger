@@ -92,6 +92,42 @@ button[type="submit"]:hover {
   position: relative;
 }
 
+/* 5-star rating styles */
+.star-rating {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 2px;
+  margin-bottom: 8px;
+}
+.star {
+  font-size: 1.35rem;
+  color: #e2e8f0;
+  cursor: pointer;
+  transition:
+    color 0.18s,
+    transform 0.12s;
+  user-select: none;
+}
+.star.filled {
+  color: #fbbf24;
+  text-shadow: 0 1px 2px #f59e42a0;
+}
+.star:hover,
+.star:focus {
+  color: #f59e42;
+  transform: scale(1.13);
+  outline: none;
+}
+.star-rating .star:active {
+  transform: scale(0.98);
+}
+.star-rating .rating-count {
+  font-size: 0.95rem;
+  color: #64748b;
+  margin-left: 7px;
+}
+
 .prompt-title {
   font-size: 1.1rem;
   font-weight: 700;
