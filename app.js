@@ -91,6 +91,125 @@ document.addEventListener("DOMContentLoaded", function () {
       card.appendChild(ratingWrap);
       card.appendChild(preview);
       card.appendChild(delBtn);
+      // --- Notes Section ---
+      const notesSection = document.createElement("section");
+      notesSection.className = "notes-section";
+      notesSection.setAttribute("aria-label", "Notes section for this prompt");
+
+      const notesHeader = document.createElement("div");
+      notesHeader.className = "notes-header";
+      notesHeader.textContent = "Notes";
+      notesSection.appendChild(notesHeader);
+
+      // Notes list
+      const notesList = document.createElement("ul");
+      notesList.className = "notes-list";
+      notesList.setAttribute("data-prompt-id", prompt.id);
+      notesSection.appendChild(notesList);
+
+      // Render notes for this prompt
+      const notesByPrompt = getNotesByPrompt();
+      const notes = notesByPrompt[prompt.id] || [];
+      notes.forEach((note) => {
+        const noteItem = document.createElement("li");
+        noteItem.className = "note-item";
+        noteItem.setAttribute("data-note-id", note.id);
+
+        // If editing, show textarea
+        if (note.editing) {
+          const editInput = document.createElement("textarea");
+          editInput.className = "add-note-input";
+          editInput.value = note.content;
+          editInput.rows = 2;
+          editInput.setAttribute("aria-label", "Edit note");
+          noteItem.appendChild(editInput);
+
+          const actions = document.createElement("div");
+          actions.className = "note-actions";
+
+          const saveBtn = document.createElement("button");
+          saveBtn.className = "note-btn";
+          saveBtn.textContent = "Save";
+          saveBtn.setAttribute("aria-label", "Save note");
+          saveBtn.addEventListener("click", () =>
+            saveEditNote(prompt.id, note.id, editInput.value),
+          );
+          actions.appendChild(saveBtn);
+
+          const cancelBtn = document.createElement("button");
+          cancelBtn.className = "note-btn";
+          cancelBtn.textContent = "Cancel";
+          cancelBtn.setAttribute("aria-label", "Cancel editing note");
+          cancelBtn.addEventListener("click", () =>
+            cancelEditNote(prompt.id, note.id),
+          );
+          actions.appendChild(cancelBtn);
+
+          noteItem.appendChild(actions);
+        } else {
+          const contentDiv = document.createElement("div");
+          contentDiv.className = "note-content";
+          contentDiv.textContent = note.content;
+          noteItem.appendChild(contentDiv);
+
+          const timestamp = document.createElement("span");
+          timestamp.className = "note-timestamp";
+          timestamp.textContent = formatTimestamp(note.lastEdited);
+          noteItem.appendChild(timestamp);
+
+          const actions = document.createElement("div");
+          actions.className = "note-actions";
+
+          const editBtn = document.createElement("button");
+          editBtn.className = "note-btn";
+          editBtn.textContent = "Edit";
+          editBtn.setAttribute("aria-label", "Edit note");
+          editBtn.addEventListener("click", () =>
+            startEditNote(prompt.id, note.id),
+          );
+          actions.appendChild(editBtn);
+
+          const delBtn = document.createElement("button");
+          delBtn.className = "note-btn";
+          delBtn.textContent = "Delete";
+          delBtn.setAttribute("aria-label", "Delete note");
+          delBtn.addEventListener("click", () =>
+            deleteNote(prompt.id, note.id),
+          );
+          actions.appendChild(delBtn);
+
+          noteItem.appendChild(actions);
+        }
+        notesList.appendChild(noteItem);
+      });
+
+      // Add note form
+      const addNoteForm = document.createElement("form");
+      addNoteForm.className = "add-note-form";
+      addNoteForm.setAttribute("autocomplete", "off");
+      addNoteForm.addEventListener("submit", function (e) {
+        e.preventDefault();
+        const input = addNoteForm.querySelector(".add-note-input");
+        const value = input.value.trim();
+        if (!value) return;
+        addNote(prompt.id, value);
+        input.value = "";
+      });
+      const addNoteInput = document.createElement("input");
+      addNoteInput.className = "add-note-input";
+      addNoteInput.type = "text";
+      addNoteInput.maxLength = 300;
+      addNoteInput.setAttribute("aria-label", "Add note");
+      addNoteInput.required = true;
+      addNoteForm.appendChild(addNoteInput);
+      const addNoteBtn = document.createElement("button");
+      addNoteBtn.className = "add-note-btn";
+      addNoteBtn.type = "submit";
+      addNoteBtn.textContent = "Add Note";
+      addNoteForm.appendChild(addNoteBtn);
+      notesSection.appendChild(addNoteForm);
+
+      card.appendChild(notesSection);
       promptsList.appendChild(card);
     });
     // Helper: highlight stars on hover/focus
@@ -128,6 +247,96 @@ document.addEventListener("DOMContentLoaded", function () {
     prompts.splice(idx, 1);
     savePrompts(prompts);
     renderPrompts();
+  }
+
+  // --- Notes Section Logic ---
+  function getNotesByPrompt() {
+    try {
+      return JSON.parse(localStorage.getItem("notesByPrompt") || "{}") || {};
+    } catch {
+      return {};
+    }
+  }
+  function saveNotesByPrompt(notesByPrompt) {
+    try {
+      localStorage.setItem("notesByPrompt", JSON.stringify(notesByPrompt));
+    } catch (e) {
+      alert("Error saving notes: localStorage quota exceeded.");
+    }
+  }
+  function addNote(promptId, content) {
+    const notesByPrompt = getNotesByPrompt();
+    const note = {
+      id: "note-" + Date.now() + "-" + Math.floor(Math.random() * 10000),
+      content,
+      lastEdited: Date.now(),
+    };
+    if (!notesByPrompt[promptId]) notesByPrompt[promptId] = [];
+    notesByPrompt[promptId].push(note);
+    saveNotesByPrompt(notesByPrompt);
+    renderPrompts();
+    flashNoteSaved(promptId, note.id);
+  }
+  function startEditNote(promptId, noteId) {
+    const notesByPrompt = getNotesByPrompt();
+    notesByPrompt[promptId] = (notesByPrompt[promptId] || []).map((n) =>
+      n.id === noteId ? { ...n, editing: true } : { ...n, editing: false },
+    );
+    saveNotesByPrompt(notesByPrompt);
+    renderPrompts();
+  }
+  function saveEditNote(promptId, noteId, newContent) {
+    const notesByPrompt = getNotesByPrompt();
+    notesByPrompt[promptId] = (notesByPrompt[promptId] || []).map((n) =>
+      n.id === noteId
+        ? { ...n, content: newContent, lastEdited: Date.now(), editing: false }
+        : { ...n, editing: false },
+    );
+    saveNotesByPrompt(notesByPrompt);
+    renderPrompts();
+    flashNoteSaved(promptId, noteId);
+  }
+  function cancelEditNote(promptId, noteId) {
+    const notesByPrompt = getNotesByPrompt();
+    notesByPrompt[promptId] = (notesByPrompt[promptId] || []).map((n) =>
+      n.id === noteId ? { ...n, editing: false } : n,
+    );
+    saveNotesByPrompt(notesByPrompt);
+    renderPrompts();
+  }
+  function deleteNote(promptId, noteId) {
+    if (!confirm("Delete this note? This cannot be undone.")) return;
+    const notesByPrompt = getNotesByPrompt();
+    notesByPrompt[promptId] = (notesByPrompt[promptId] || []).filter(
+      (n) => n.id !== noteId,
+    );
+    saveNotesByPrompt(notesByPrompt);
+    renderPrompts();
+  }
+  function formatTimestamp(ts) {
+    const d = new Date(ts);
+    return (
+      d.getFullYear() +
+      "-" +
+      String(d.getMonth() + 1).padStart(2, "0") +
+      "-" +
+      String(d.getDate()).padStart(2, "0") +
+      " " +
+      String(d.getHours()).padStart(2, "0") +
+      ":" +
+      String(d.getMinutes()).padStart(2, "0")
+    );
+  }
+  function flashNoteSaved(promptId, noteId) {
+    setTimeout(() => {
+      const card = document.querySelector(
+        `.notes-list[data-prompt-id='${promptId}'] [data-note-id='${noteId}'] .note-content`,
+      );
+      if (card) {
+        card.classList.add("note-saved");
+        setTimeout(() => card.classList.remove("note-saved"), 700);
+      }
+    }, 50);
   }
 
   form.addEventListener("submit", function (e) {
