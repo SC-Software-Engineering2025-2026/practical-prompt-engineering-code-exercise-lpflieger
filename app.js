@@ -6,6 +6,94 @@ document.addEventListener("DOMContentLoaded", function () {
   const contentInput = document.getElementById("prompt-content");
   const promptsList = document.getElementById("prompts-list");
 
+  // --- Metadata utilities ---
+  function isValidISOString(s) {
+    if (typeof s !== "string") return false;
+    const t = Date.parse(s);
+    if (Number.isNaN(t)) return false;
+    return new Date(t).toISOString() === s;
+  }
+
+  function validateModelName(name) {
+    if (typeof name !== "string" || name.trim() === "")
+      throw new Error("Model name must be a non-empty string.");
+    if (name.length > 100)
+      throw new Error("Model name must be 100 characters or fewer.");
+    return name.trim();
+  }
+
+  function estimateTokens(text, isCode) {
+    try {
+      if (typeof text !== "string") throw new Error("Text must be a string.");
+      const words = text.trim() === "" ? 0 : text.trim().split(/\s+/).length;
+      const chars = text.length;
+      let min = 0.75 * words;
+      let max = 0.25 * chars;
+      if (isCode) {
+        min = min * 1.3;
+        max = max * 1.3;
+      }
+      min = Math.ceil(min);
+      max = Math.ceil(max);
+      const reference = Math.max(min, max);
+      let confidence = "high";
+      if (reference >= 5000) confidence = "low";
+      else if (reference >= 1000) confidence = "medium";
+      return { min, max, confidence };
+    } catch (e) {
+      throw new Error("estimateTokens error: " + e.message);
+    }
+  }
+
+  function trackModel(modelName, content) {
+    try {
+      const model = validateModelName(modelName);
+      // detect isCode: prefer explicit checkbox if present, else basic heuristic
+      let isCode = false;
+      const cb = document.getElementById("prompt-is-code");
+      if (cb) isCode = !!cb.checked;
+      else {
+        const codeHints =
+          /\b(function|def|class|import|return|console\.|console\b|;|\{|\})\b/;
+        isCode = codeHints.test(content);
+      }
+      const createdAt = new Date().toISOString();
+      const tokenEstimate = estimateTokens(content, isCode);
+      const metadata = {
+        model,
+        createdAt,
+        updatedAt: createdAt,
+        tokenEstimate,
+      };
+      // validate ISO strings
+      if (!isValidISOString(metadata.createdAt))
+        throw new Error("createdAt is not a valid ISO 8601 string.");
+      if (!isValidISOString(metadata.updatedAt))
+        throw new Error("updatedAt is not a valid ISO 8601 string.");
+      return metadata;
+    } catch (e) {
+      throw new Error("trackModel error: " + e.message);
+    }
+  }
+
+  function updateTimestamps(metadata) {
+    try {
+      if (!metadata || typeof metadata !== "object")
+        throw new Error("metadata must be an object");
+      if (!metadata.createdAt || !isValidISOString(metadata.createdAt))
+        throw new Error("metadata.createdAt must be a valid ISO 8601 string");
+      const now = new Date().toISOString();
+      if (Date.parse(now) < Date.parse(metadata.createdAt))
+        throw new Error("updatedAt cannot be earlier than createdAt");
+      metadata.updatedAt = now;
+      if (!isValidISOString(metadata.updatedAt))
+        throw new Error("updatedAt is not a valid ISO 8601 string");
+      return metadata;
+    } catch (e) {
+      throw new Error("updateTimestamps error: " + e.message);
+    }
+  }
+
   function getPrompts() {
     return JSON.parse(localStorage.getItem("prompts") || "[]");
   }
@@ -16,6 +104,16 @@ document.addEventListener("DOMContentLoaded", function () {
 
   function renderPrompts() {
     const prompts = getPrompts();
+    // sort by createdAt descending using metadata if present
+    prompts.sort((a, b) => {
+      const aTime = Date.parse(
+        (a.metadata && a.metadata.createdAt) || a.createdAt || 0,
+      );
+      const bTime = Date.parse(
+        (b.metadata && b.metadata.createdAt) || b.createdAt || 0,
+      );
+      return bTime - aTime;
+    });
     promptsList.innerHTML = "";
     if (prompts.length === 0) {
       promptsList.innerHTML =
@@ -29,6 +127,35 @@ document.addEventListener("DOMContentLoaded", function () {
       const title = document.createElement("div");
       title.className = "prompt-title";
       title.textContent = prompt.title;
+
+      // Metadata row (model, timestamps, token estimate)
+      const metadata = prompt.metadata || prompt.meta || null;
+      const metaRow = document.createElement("div");
+      metaRow.className = "metadata-row";
+      if (metadata && metadata.model) {
+        const modelBadge = document.createElement("div");
+        modelBadge.className = "model-badge";
+        modelBadge.textContent = metadata.model;
+        metaRow.appendChild(modelBadge);
+      }
+      if (metadata && metadata.createdAt) {
+        const ts = document.createElement("div");
+        ts.className = "timestamps";
+        const created = new Date(metadata.createdAt);
+        const updated = metadata.updatedAt
+          ? new Date(metadata.updatedAt)
+          : created;
+        ts.textContent = `Created: ${created.toLocaleString()} • Updated: ${updated.toLocaleString()}`;
+        metaRow.appendChild(ts);
+      }
+      if (metadata && metadata.tokenEstimate) {
+        const t = metadata.tokenEstimate;
+        const badge = document.createElement("div");
+        badge.className = `token-estimate confidence-${t.confidence}`;
+        badge.textContent = `${t.min}–${t.max} tokens (${t.confidence})`;
+        metaRow.appendChild(badge);
+      }
+      if (metaRow.children.length > 0) card.appendChild(metaRow);
 
       // --- 5-star rating UI ---
       const ratingWrap = document.createElement("div");
@@ -344,14 +471,26 @@ document.addEventListener("DOMContentLoaded", function () {
     const title = titleInput.value.trim();
     const content = contentInput.value.trim();
     if (!title || !content) return;
-    const prompts = getPrompts();
-    // Assign a unique id for rating tracking
-    const id = "prompt-" + Date.now() + "-" + Math.floor(Math.random() * 10000);
-    prompts.push({ id, title, content, rating: 0, ratingCount: 0 });
-    savePrompts(prompts);
-    renderPrompts();
-    form.reset();
-    titleInput.focus();
+    const modelInput = document.getElementById("prompt-model");
+    const modelName = modelInput ? modelInput.value.trim() : "";
+    try {
+      const prompts = getPrompts();
+      // Assign a unique id for rating tracking
+      const id =
+        "prompt-" + Date.now() + "-" + Math.floor(Math.random() * 10000);
+      // build metadata using trackModel (auto-created timestamps and estimate)
+      const metadata = trackModel(modelName, content);
+      prompts.push({ id, title, content, rating: 0, ratingCount: 0, metadata });
+      savePrompts(prompts);
+      renderPrompts();
+      form.reset();
+      titleInput.focus();
+    } catch (err) {
+      console.error(err);
+      alert(
+        "Could not save prompt: " + (err && err.message ? err.message : err),
+      );
+    }
   });
 
   renderPrompts();

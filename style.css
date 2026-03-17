@@ -182,6 +182,44 @@ button[type="submit"]:hover {
   word-break: break-word;
 }
 
+.metadata-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+.model-badge {
+  background: #eef2ff;
+  color: #3730a3;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-weight: 700;
+  font-size: 0.9rem;
+}
+.timestamps {
+  font-size: 0.85rem;
+  color: #475569;
+}
+.token-estimate {
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-weight: 700;
+  font-size: 0.9rem;
+}
+.confidence-high {
+  background: #dcfce7;
+  color: #166534;
+}
+.confidence-medium {
+  background: #fef3c7;
+  color: #92400e;
+}
+.confidence-low {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
 .delete-btn {
   align-self: flex-end;
   background: #e11d48;
