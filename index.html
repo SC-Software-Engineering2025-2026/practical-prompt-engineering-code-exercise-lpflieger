@@ -50,6 +50,16 @@
       <aside class="right-panel">
         <div class="library-container">
           <h2 class="library-title">Saved Prompts</h2>
+          <div class="export-import">
+            <button id="export-btn" class="small-btn">Export Prompts</button>
+            <button id="import-btn" class="small-btn">Import Prompts</button>
+            <input
+              id="import-file-input"
+              type="file"
+              accept="application/json"
+              style="display: none"
+            />
+          </div>
           <div id="prompts-list" class="prompts-list"></div>
         </div>
       </aside>

@@ -102,6 +102,264 @@ document.addEventListener("DOMContentLoaded", function () {
     localStorage.setItem("prompts", JSON.stringify(prompts));
   }
 
+  // --- Export / Import Utilities ---
+  function computeStats(prompts) {
+    const totalPrompts = prompts.length;
+    let ratingSum = 0;
+    let ratingCountSum = 0;
+    const modelCounts = {};
+    prompts.forEach((p) => {
+      if (p && typeof p === "object") {
+        if (typeof p.rating === "number" && p.ratingCount > 0) {
+          ratingSum += p.rating * p.ratingCount;
+          ratingCountSum += p.ratingCount;
+        }
+        try {
+          const m = (p.metadata && p.metadata.model) || null;
+          if (m) modelCounts[m] = (modelCounts[m] || 0) + 1;
+        } catch (e) {}
+      }
+    });
+    const averageRating = ratingCountSum ? ratingSum / ratingCountSum : 0;
+    let mostUsedModel = null;
+    let topCount = 0;
+    Object.keys(modelCounts).forEach((m) => {
+      if (modelCounts[m] > topCount) {
+        topCount = modelCounts[m];
+        mostUsedModel = m;
+      }
+    });
+    return { totalPrompts, averageRating, mostUsedModel };
+  }
+
+  function validatePromptShape(p) {
+    if (!p || typeof p !== "object")
+      throw new Error("Prompt must be an object");
+    if (!p.id || typeof p.id !== "string")
+      throw new Error("Prompt missing valid 'id'");
+    if (!p.title || typeof p.title !== "string")
+      throw new Error("Prompt missing valid 'title'");
+    if (!p.content || typeof p.content !== "string")
+      throw new Error("Prompt missing valid 'content'");
+    if (!p.metadata || typeof p.metadata !== "object")
+      throw new Error("Prompt missing 'metadata' object");
+    if (!p.metadata.model) throw new Error("Prompt metadata missing 'model'");
+    if (!isValidISOString(p.metadata.createdAt))
+      throw new Error("Prompt.metadata.createdAt must be valid ISO string");
+    if (!isValidISOString(p.metadata.updatedAt))
+      throw new Error("Prompt.metadata.updatedAt must be valid ISO string");
+    return true;
+  }
+
+  function gatherExportPayload() {
+    const prompts = getPrompts();
+    // Validate prompts integrity
+    for (let i = 0; i < prompts.length; i++) validatePromptShape(prompts[i]);
+    const stats = computeStats(prompts);
+    return {
+      version: "1.0.0",
+      exportedAt: new Date().toISOString(),
+      stats,
+      prompts,
+      notesByPrompt: getNotesByPrompt(),
+      userRatings: JSON.parse(localStorage.getItem("userRatings") || "{}"),
+    };
+  }
+
+  function downloadJSON(obj, filename) {
+    const blob = new Blob([JSON.stringify(obj, null, 2)], {
+      type: "application/json",
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  }
+
+  function exportPromptsHandler() {
+    try {
+      const payload = gatherExportPayload();
+      const fname = `prompts-export-${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
+      downloadJSON(payload, fname);
+      alert("Export created: " + fname);
+    } catch (e) {
+      console.error(e);
+      alert("Export failed: " + (e && e.message ? e.message : e));
+    }
+  }
+
+  function createBackup() {
+    try {
+      const backup = {
+        createdAt: new Date().toISOString(),
+        prompts: getPrompts(),
+        notesByPrompt: getNotesByPrompt(),
+        userRatings: JSON.parse(localStorage.getItem("userRatings") || "{}"),
+      };
+      const key = "prompts-backup-" + Date.now();
+      localStorage.setItem(key, JSON.stringify(backup));
+      localStorage.setItem("prompts-last-backup-key", key);
+      return key;
+    } catch (e) {
+      console.error("Backup failed", e);
+      throw new Error("Could not create backup before import: " + e.message);
+    }
+  }
+
+  function restoreBackup(key) {
+    try {
+      const raw = localStorage.getItem(key);
+      if (!raw) throw new Error("Backup not found: " + key);
+      const b = JSON.parse(raw);
+      if (b.prompts) savePrompts(b.prompts);
+      if (b.notesByPrompt) saveNotesByPrompt(b.notesByPrompt);
+      if (b.userRatings)
+        localStorage.setItem("userRatings", JSON.stringify(b.userRatings));
+      return true;
+    } catch (e) {
+      console.error("Restore backup failed", e);
+      throw e;
+    }
+  }
+
+  function importPromptsPayload(payload) {
+    if (!payload || typeof payload !== "object")
+      throw new Error("Invalid payload");
+    if (!payload.version) throw new Error("Payload missing version");
+    // Accept major version 1
+    const major = String(payload.version).split(".")[0];
+    if (major !== "1")
+      throw new Error("Unsupported export version: " + payload.version);
+    if (!payload.prompts || !Array.isArray(payload.prompts))
+      throw new Error("Payload missing prompts array");
+    // Validate incoming prompts
+    for (let i = 0; i < payload.prompts.length; i++)
+      validatePromptShape(payload.prompts[i]);
+
+    const existing = getPrompts();
+    const existingById = {};
+    existing.forEach((p) => (existingById[p.id] = p));
+    const duplicates = payload.prompts.filter((p) => existingById[p.id]);
+
+    let action = "skip"; // default
+    if (duplicates.length > 0) {
+      const ids = duplicates
+        .map((d) => d.id)
+        .slice(0, 10)
+        .join(", ");
+      const resp = prompt(
+        `Import detected ${duplicates.length} duplicate ID(s): ${ids}. Choose action: replace | skip | keep-both`,
+        "skip",
+      );
+      if (!resp) throw new Error("Import cancelled by user");
+      action = resp.trim().toLowerCase();
+      if (!["replace", "skip", "keep-both"].includes(action))
+        throw new Error("Invalid import action: " + action);
+    }
+
+    // Backup before applying
+    const backupKey = createBackup();
+
+    try {
+      let merged = [...existing];
+      const idsSeen = new Set(merged.map((p) => p.id));
+      payload.prompts.forEach((imp) => {
+        if (!idsSeen.has(imp.id)) {
+          merged.push(imp);
+          idsSeen.add(imp.id);
+        } else {
+          if (action === "replace") {
+            merged = merged.map((p) => (p.id === imp.id ? imp : p));
+          } else if (action === "skip") {
+            // do nothing
+          } else if (action === "keep-both") {
+            const newId =
+              imp.id +
+              "-import-" +
+              Date.now() +
+              "-" +
+              Math.floor(Math.random() * 10000);
+            const copy = { ...imp, id: newId };
+            merged.push(copy);
+          }
+        }
+      });
+      savePrompts(merged);
+      // optionally merge notes and userRatings if present
+      if (payload.notesByPrompt) {
+        const notes = getNotesByPrompt();
+        const mergedNotes = { ...notes, ...payload.notesByPrompt };
+        saveNotesByPrompt(mergedNotes);
+      }
+      if (payload.userRatings) {
+        const ur = JSON.parse(localStorage.getItem("userRatings") || "{}");
+        const mergedUR = { ...ur, ...payload.userRatings };
+        localStorage.setItem("userRatings", JSON.stringify(mergedUR));
+      }
+      alert("Import successful.");
+      renderPrompts();
+      return true;
+    } catch (e) {
+      console.error("Import failed, restoring backup", e);
+      try {
+        restoreBackup(backupKey);
+      } catch (restoreErr) {
+        console.error("Rollback failed", restoreErr);
+        alert(
+          "Import failed and rollback also failed: " +
+            (restoreErr.message || restoreErr),
+        );
+        throw restoreErr;
+      }
+      alert(
+        "Import failed and previous data was restored: " + (e.message || e),
+      );
+      throw e;
+    }
+  }
+
+  function handleImportFile(file) {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onerror = function (ev) {
+      alert("Failed to read file: " + ev);
+    };
+    reader.onload = function (e) {
+      try {
+        const text = e.target.result;
+        const payload = JSON.parse(text);
+        importPromptsPayload(payload);
+      } catch (err) {
+        console.error(err);
+        alert("Import failed: " + (err && err.message ? err.message : err));
+      }
+    };
+    reader.readAsText(file);
+  }
+
+  // Wire up UI buttons
+  try {
+    const exportBtn = document.getElementById("export-btn");
+    const importBtn = document.getElementById("import-btn");
+    const importFileInput = document.getElementById("import-file-input");
+    if (exportBtn) exportBtn.addEventListener("click", exportPromptsHandler);
+    if (importBtn && importFileInput) {
+      importBtn.addEventListener("click", () => importFileInput.click());
+      importFileInput.addEventListener("change", (e) => {
+        const f = e.target.files && e.target.files[0];
+        if (f) handleImportFile(f);
+        // clear value so same file can be reselected later
+        importFileInput.value = "";
+      });
+    }
+  } catch (e) {
+    console.error("Error wiring export/import UI", e);
+  }
+
   function renderPrompts() {
     const prompts = getPrompts();
     // sort by createdAt descending using metadata if present
